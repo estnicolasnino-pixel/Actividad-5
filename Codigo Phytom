@@ -1,0 +1,90 @@
+import time
+import math
+import serial
+import pybullet as p
+import pybullet_data
+
+# ==========================================
+# 1. CONFIGURACIÓN DEL PUERTO SERIAL
+# ==========================================
+PUERTO_SERIAL = 'COM5'
+BAUDRATE = 115200
+
+try:
+    ser = serial.Serial(PUERTO_SERIAL, BAUDRATE, timeout=0.05)
+    print(f" Conectado exitosamente a la ESP32 en el puerto {PUERTO_SERIAL}")
+except Exception as e:
+    print(f" Error al conectar al puerto serial: {e}")
+    print("Verifica qué puerto COM asignó Windows y desconecta/conecta el cable USB.")
+    exit()
+
+# ==========================================
+# 2. INICIALIZACIÓN DE LA SIMULACIÓN 3D
+# ==========================================
+physicsClient = p.connect(p.GUI)
+p.setAdditionalSearchPath(pybullet_data.getDataPath())
+p.setGravity(0, 0, -9.81)
+
+# Cargar plano de suelo y modelo del robot
+planeId = p.loadURDF("plane.urdf")
+robotId = p.loadURDF("brazo.urdf", [0, 0, 0], useFixedBase=True)
+
+print("\n🚀 Simulación iniciada. Mueve el joystick para controlar el brazo...")
+
+# ==========================================
+# 3. BUCLE PRINCIPAL DE CONTROL
+# ==========================================
+try:
+    while True:
+        # Verificar si la ventana de PyBullet sigue activa
+        try:
+            if not p.isConnected():
+                break
+        except Exception:
+            break
+
+        # Lectura y procesamiento de datos serie
+        try:
+            if ser.in_waiting > 0:
+                linea = ser.readline().decode('utf-8', errors='ignore').strip()
+                datos = linea.split(',')
+                
+                if len(datos) == 3:
+                    val_x = float(datos[0])
+                    val_y = float(datos[1])
+                    estado_pinza = float(datos[2])
+
+                    # Mapeo de entradas (0 a 4095) a posiciones cinemáticas
+                    angulo_base = math.radians((val_x - 2048) / 2048.0 * 90)
+                    angulo_brazo = math.radians((val_y - 2048) / 2048.0 * 60)
+                    pos_pinza = 0.03 if estado_pinza == 1 else 0.0
+
+                    # Aplicar control de posición a cada articulación del robot
+                    p.setJointMotorControl2(robotId, 0, p.POSITION_CONTROL, targetPosition=angulo_base)
+                    p.setJointMotorControl2(robotId, 1, p.POSITION_CONTROL, targetPosition=angulo_brazo)
+                    p.setJointMotorControl2(robotId, 3, p.POSITION_CONTROL, targetPosition=pos_pinza)
+                    p.setJointMotorControl2(robotId, 4, p.POSITION_CONTROL, targetPosition=pos_pinza)
+        except (serial.SerialException, Exception):
+            # Previene caídas si ocurre un micro-desconexion en el cable USB
+            pass
+
+        # Avanzar el motor de física
+        try:
+            p.stepSimulation()
+        except Exception:
+            break
+
+        time.sleep(0.01)
+
+except KeyboardInterrupt:
+    print("\nSimulación finalizada por el usuario.")
+finally:
+    # Liberación limpia de recursos y puertos
+    if 'ser' in locals() and ser.is_open:
+        ser.close()
+    try:
+        if p.isConnected():
+            p.disconnect()
+    except Exception:
+        pass
+    print("✅ Conexión cerrada y recursos liberados correctamente.")
